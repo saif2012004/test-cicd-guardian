@@ -1,60 +1,55 @@
-name: CI/CD Guardian Test
+name: CI/CD Guardian Live Demo (Shows Recommendation + URGENT)
 
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
+  workflow_dispatch:
 
 jobs:
-  test-build:
+  demo-guardian:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Simulate Failed + Slow Build
+      - name: Trigger Critical Failure Scenario
         run: |
-          echo "Simulating a slow build..."
-          sleep 60  # Makes duration ~60s (not triggering >600s threshold yet)
-          echo "Running tests..."
-          exit 1  # Force failure to trigger anomalies
+          echo "Simulating FAILED + SLOW + 2 CVEs build..."
 
-      - name: Call CI/CD Guardian Agent
-        if: always() # Runs even if build failed
+      - name: Call CI/CD Guardian Agent → See Full Recommendation
+        id: guardian
         run: |
-          # Real pipeline data from GitHub context
-          PIPELINE_ID="github-actions-${{ github.run_id }}-${{ github.sha_short }}"
-          STATUS="failed"
-          DURATION=912  # >600s to trigger "slow" anomaly
-          LOGS="Build failed: Tests crashed with exit code 1. npm ERR! and pytest failures detected."
-          VULNS='["CVE-2025-1337", "CVE-2025-9999"]'  # 2 vulnerabilities for CRITICAL
-          BRANCH="${{ github.ref_name }}"
-          COMMIT="${{ github.sha }}"
-
-          echo "Sending pipeline event to Guardian Agent..."
           RESPONSE=$(curl -s -X POST "${{ secrets.GUARDIAN_URL }}/analyze" \
             -H "Content-Type: application/json" \
-            -d "{
-              \"pipeline_id\": \"$PIPELINE_ID\",
-              \"status\": \"$STATUS\",
-              \"duration_seconds\": $DURATION,
-              \"logs\": \"$LOGS\",
-              \"vulnerabilities\": $VULNS,
-              \"branch\": \"$BRANCH\",
-              \"commit_sha\": \"$COMMIT\"
-            }")
+            -d '{
+              "pipeline_id": "demo-critical-${{ github.run_id }}",
+              "status": "failed",
+              "duration_seconds": 985,
+              "logs": "pytest: 57 failed | npm ERR! | Snyk found critical issues",
+              "vulnerabilities": ["CVE-2025-1337", "CVE-2025-9999"],
+              "branch": "main",
+              "commit_sha": "${{ github.sha }}"
+            }')
 
-          echo "Guardian Agent Response:"
-          echo "$RESPONSE"
+          echo "$RESPONSE" | jq -r .
 
-          # Parse and assert (for demo)
-          if echo "$RESPONSE" | grep -q '"severity": "critical"'; then
-            echo "✅ CRITICAL anomalies detected! Agent working perfectly."
-            echo "::notice:: Guardian detected: $(echo "$RESPONSE" | jq -r '.anomalies[]' | tr '\n' ' ')"
-            echo "::notice:: Recommendation: $(echo "$RESPONSE" | jq -r '.recommendation')"
-          else
-            echo "❌ Expected CRITICAL severity but got something else."
-            echo "$RESPONSE"
-            exit 1
+          # Extract and highlight key fields
+          SEVERITY=$(echo "$RESPONSE" | jq -r '.severity')
+          RECOMMENDATION=$(echo "$RESPONSE" | jq -r '.recommendation')
+          ANOMALIES=$(echo "$RESPONSE" | jq -r '.anomalies[]' | wc -l)
+
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "   CI/CD GUARDIAN AGENT RESULT"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "Severity       → $SEVERITY"
+          echo "Anomalies found → $ANOMALIES"
+          echo "Recommendation → $RECOMMENDATION"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+
+          # Make URGENT message impossible to miss
+          if [[ "$SEVERITY" == "critical" ]]; then
+            echo "::error::CRITICAL PIPELINE ISSUES DETECTED!"
+            echo "::error::$RECOMMENDATION"
           fi
+
+          # Save for later steps (optional)
+          echo "response=$RESPONSE" >> $GITHUB_OUTPUT
