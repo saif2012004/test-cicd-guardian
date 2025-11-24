@@ -1,0 +1,60 @@
+name: CI/CD Guardian Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Simulate Failed + Slow Build
+        run: |
+          echo "Simulating a slow build..."
+          sleep 60  # Makes duration ~60s (not triggering >600s threshold yet)
+          echo "Running tests..."
+          exit 1  # Force failure to trigger anomalies
+
+      - name: Call CI/CD Guardian Agent
+        if: always() # Runs even if build failed
+        run: |
+          # Real pipeline data from GitHub context
+          PIPELINE_ID="github-actions-${{ github.run_id }}-${{ github.sha_short }}"
+          STATUS="failed"
+          DURATION=912  # >600s to trigger "slow" anomaly
+          LOGS="Build failed: Tests crashed with exit code 1. npm ERR! and pytest failures detected."
+          VULNS='["CVE-2025-1337", "CVE-2025-9999"]'  # 2 vulnerabilities for CRITICAL
+          BRANCH="${{ github.ref_name }}"
+          COMMIT="${{ github.sha }}"
+
+          echo "Sending pipeline event to Guardian Agent..."
+          RESPONSE=$(curl -s -X POST "${{ secrets.GUARDIAN_URL }}/analyze" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"pipeline_id\": \"$PIPELINE_ID\",
+              \"status\": \"$STATUS\",
+              \"duration_seconds\": $DURATION,
+              \"logs\": \"$LOGS\",
+              \"vulnerabilities\": $VULNS,
+              \"branch\": \"$BRANCH\",
+              \"commit_sha\": \"$COMMIT\"
+            }")
+
+          echo "Guardian Agent Response:"
+          echo "$RESPONSE"
+
+          # Parse and assert (for demo)
+          if echo "$RESPONSE" | grep -q '"severity": "critical"'; then
+            echo "✅ CRITICAL anomalies detected! Agent working perfectly."
+            echo "::notice:: Guardian detected: $(echo "$RESPONSE" | jq -r '.anomalies[]' | tr '\n' ' ')"
+            echo "::notice:: Recommendation: $(echo "$RESPONSE" | jq -r '.recommendation')"
+          else
+            echo "❌ Expected CRITICAL severity but got something else."
+            echo "$RESPONSE"
+            exit 1
+          fi
